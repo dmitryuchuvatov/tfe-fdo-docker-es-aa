@@ -5,7 +5,7 @@ This repository creates a new installation of TFE FDO in Active-Active mode on D
 
 # Diagram
 
-WIP
+![Diagram](/diagram/tfe_fdo_active-active_on_aws.png)
 
 # Prerequisites
 + Have Terraform installed as per the [official documentation](https://developer.hashicorp.com/terraform/tutorials/aws-get-started/install-cli)
