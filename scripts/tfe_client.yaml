@@ -1,0 +1,12 @@
+  #cloud-config
+write_files:
+  - path: /var/tmp/certificate.sh
+    permissions: '0750'
+    content: |
+      #!/usr/bin/env bash
+      sudo snap install aws-cli --classic
+      sleep 60
+      sudo aws s3 cp s3://${certs_bucket}/${pem_file} ./
+      chmod 600 ${pem_file}  
+runcmd:
+  - sudo bash /var/tmp/certificate.sh

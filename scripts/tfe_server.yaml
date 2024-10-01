@@ -1,0 +1,113 @@
+  #cloud-config
+write_files:
+  - path: /var/tmp/install_docker.sh 
+    permissions: '0750'
+    content: |
+      #!/usr/bin/env bash
+      curl -fsSL https://get.docker.com -o get-docker.sh
+      sudo sh get-docker.sh --version 24.0
+
+  - path: /var/tmp/certificates.sh 
+    permissions: '0750'
+    content: |
+      #!/usr/bin/env bash
+      
+      # Create folders for FDO installation and TLS certificates
+
+      mkdir -p /fdo/certs
+
+      echo ${full_chain} | base64 --decode > /fdo/certs/cert.pem
+      echo ${private_key_pem} | base64 --decode > /fdo/certs/key.pem
+
+      
+  - path: /var/tmp/compose.yaml
+    permissions: '0640'
+    content: |
+      name: terraform-enterprise
+      services:
+        tfe:
+          image: images.releases.hashicorp.com/hashicorp/terraform-enterprise:${tfe_version}
+          environment:
+            TFE_LICENSE: ${tfe_license}
+            TFE_HOSTNAME: ${tfe_hostname}
+            TFE_ENCRYPTION_PASSWORD: ${enc_password}
+            TFE_OPERATIONAL_MODE: "active-active"
+            TFE_DISK_CACHE_VOLUME_NAME: $${COMPOSE_PROJECT_NAME}_terraform-enterprise-cache
+            TFE_TLS_CERT_FILE: /etc/ssl/private/terraform-enterprise/cert.pem
+            TFE_TLS_KEY_FILE: /etc/ssl/private/terraform-enterprise/key.pem
+            TFE_TLS_CA_BUNDLE_FILE: /etc/ssl/private/terraform-enterprise/bundle.pem
+            TFE_IACT_SUBNETS: "0.0.0.0/0"
+
+            # Database settings. See the configuration reference for more settings.
+            TFE_DATABASE_USER: "${db_username}"
+            TFE_DATABASE_PASSWORD: "${db_password}"
+            TFE_DATABASE_HOST: "${db_host}"
+            TFE_DATABASE_NAME: "${db_name}"
+            TFE_DATABASE_PARAMETERS: "sslmode=disable"
+
+            # Object storage settings. See the configuration reference for more settings.
+            TFE_OBJECT_STORAGE_TYPE: "s3"
+            TFE_OBJECT_STORAGE_S3_BUCKET: "${storage_bucket}"
+            TFE_OBJECT_STORAGE_S3_REGION: "${aws_region}"
+            TFE_OBJECT_STORAGE_S3_USE_INSTANCE_PROFILE: "true"
+
+            # Redis settings. See the configuration reference for more settings.
+            TFE_REDIS_HOST: "${redis_host}"
+            TFE_REDIS_USE_AUTH: "false"
+
+            # Vault cluster settings.
+            # If you are using the default internal vault, this should be the private routable IP address of the node itself.
+            TFE_VAULT_CLUSTER_ADDRESS: "http://PRIVATE_IP_ADDRESS_WILL_BE_PLACED_HERE:8201"
+          cap_add:
+            - IPC_LOCK
+          read_only: true
+          tmpfs:
+            - /tmp:mode=01777
+            - /run
+            - /var/log/terraform-enterprise
+          ports:
+            - "80:80"
+            - "443:443"
+            - "8201:8201"
+          volumes:
+            - type: bind
+              source: /var/run/docker.sock
+              target: /run/docker.sock
+            - type: bind
+              source: ./certs
+              target: /etc/ssl/private/terraform-enterprise
+            - type: volume
+              source: terraform-enterprise-cache
+              target: /var/cache/tfe-task-worker/terraform
+      volumes:
+        terraform-enterprise-cache:
+  
+  - path: /var/tmp/install_tfe.sh   
+    permissions: '0750'
+    content: |
+      #!/usr/bin/env bash    
+      # Add the private IP address of the server to the YAML file
+      AWS_TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
+      LOCAL_IP=`curl -H "X-aws-ec2-metadata-token: $AWS_TOKEN" -v http://169.254.169.254/latest/meta-data/local-ipv4`
+      sed -i "s/PRIVATE_IP_ADDRESS_WILL_BE_PLACED_HERE/$LOCAL_IP/g" /var/tmp/compose.yaml
+
+      # Prepare the remaining files
+      cp /fdo/certs/cert.pem /fdo/certs/bundle.pem
+      cp /var/tmp/compose.yaml /fdo/compose.yaml
+
+      # Switch to install path
+      pushd /fdo
+      
+      # Authenticate to container image registry
+      echo "${tfe_license}" | docker login --username terraform images.releases.hashicorp.com --password-stdin
+      
+      # Pull the image and spin up the TFE FDO container
+      docker compose up --detach  
+            
+runcmd:
+  - sudo bash /var/tmp/install_docker.sh 
+  - sudo bash /var/tmp/certificates.sh
+  - sudo bash /var/tmp/install_tfe.sh
+packages_update: true
+packages:
+  - unzip
